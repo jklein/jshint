@@ -2075,9 +2075,9 @@ var JSHINT = (function () {
 
 		if (!eqnull && state.option.eqeqeq)
 			warning("W116", this, "===", "==");
-		else if (isPoorRelation(left) && state.option.eqeqeq)
+		else if (isPoorRelation(left))
 			warning("W041", this, "===", left.value);
-		else if (isPoorRelation(right) && state.option.eqeqeq)
+		else if (isPoorRelation(right))
 			warning("W041", this, "===", right.value);
 
 		return this;
