@@ -1,6 +1,6 @@
 {
 	"name":     "jshint",
-	"version":  "2.1.2",
+	"version":  "2.3.0",
 	"homepage": "http://jshint.com/",
 	"description": "Static analysis tool for JavaScript",
 
@@ -24,28 +24,47 @@
 	},
 
 	"scripts": {
-		"build": "node ./make.js build",
-		"test": "node ./make.js test",
-		"lint": "node ./make.js lint"
+		"data": "node scripts/generate-identifier-data",
+		"build": "node bin/build",
+		"test": "nodeunit tests tests/regression tests/unit",
+		"pretest": "jshint src"
 	},
 
-	"main": "./src/stable/jshint.js",
+	"main": "./src/jshint.js",
 
 	"dependencies": {
-		"shelljs":    "0.1.x",
-		"underscore": "1.4.x",
-		"cli":        "0.4.x",
-		"minimatch":  "0.x.x",
+		"shelljs":     "0.1.x",
+		"underscore":  "1.4.x",
+		"cli":         "0.4.x",
+		"minimatch":   "0.x.x",
+		"htmlparser2": "3.3.x",
 		"console-browserify": "0.1.x"
 	},
 
 	"devDependencies": {
-		"jshint":     "2.1.x",
-		"shelljs":    "0.1.x",
-		"browserify": "2.12.x",
-		"coveraje":   "0.2.x",
-		"nodeunit":   "0.8.x",
-		"sinon":      "1.7.x"
+		"jshint":        "2.3.x",
+		"shelljs":       "0.1.x",
+		"browserify":    "2.12.x",
+		"coveraje":      "0.2.x",
+		"nodeunit":      "0.8.x",
+		"sinon":         "1.7.x",
+		"unicode-6.3.0": "0.1.x",
+		"regenerate":    "0.5.x"
+	},
+
+	"jshintConfig": {
+		"boss":      true,
+		"node":      true,
+		"strict":    true,
+		"white":     true,
+		"smarttabs": true,
+		"undef":     true,
+		"unused":    true,
+		"onecase":   true,
+		"lastsemic": true,
+		"newcap":    false,
+		"maxlen":    100,
+		"indent":    2
 	},
 
 	"licenses": [
@@ -55,5 +74,11 @@
 		}
 	],
 
-	"preferGlobal": true
+	"preferGlobal": true,
+
+	"files": [
+		"bin",
+		"src",
+		"data"
+	]
 }
