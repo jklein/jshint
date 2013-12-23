@@ -225,7 +225,7 @@ exports.group = {
 	},
 
 	textExtract: function (test) {
-		var html = "<html><script>var a = 1;</script></html>";
+		var html = "<html>text<script>var a = 1;</script></html>";
 		var text = "hello world";
 		var js   = "var a = 1;";
 
@@ -235,11 +235,11 @@ exports.group = {
 
 		test.equal(cli.extract(js, "never"), js);
 		test.equal(cli.extract(js, "auto"), js);
-		test.equal(cli.extract(js, "always"), js);
+		test.equal(cli.extract(js, "always"), '');
 
 		test.equal(cli.extract(text, "never"), text);
 		test.equal(cli.extract(text, "auto"), text);
-		test.equal(cli.extract(text, "always"), text);
+		test.equal(cli.extract(text, "always"), '');
 
 		html = [
 			"<html>",
@@ -255,7 +255,7 @@ exports.group = {
 				"</script>",
 			"</html>" ].join("\n");
 
-		js = ["\n\n", "var a = 1;", "\n\n\n\n\n", "var b = 1;\n" ].join("\n");
+		js = ["\n", "var a = 1;", "\n\n\n\n\n", "var b = 1;\n" ].join("\n");
 
 		test.equal(cli.extract(html, "auto"), js);
 		test.done();
@@ -275,6 +275,36 @@ exports.group = {
 		test.equal(run.args[1][0].extensions, ".json");
 
 		run.restore();
+		test.done();
+	},
+
+	testMalformedNpmFile: function (test) {
+		sinon.stub(process, "cwd").returns(__dirname);
+		var localNpm = path.normalize(__dirname + "/package.json");
+		var localRc = path.normalize(__dirname + "/.jshintrc");
+		var testStub = sinon.stub(shjs, "test");
+		var catStub = sinon.stub(shjs, "cat");
+
+		// stub rc file
+		testStub.withArgs("-e", localRc).returns(true);
+		catStub.withArgs(localRc).returns('{"evil": true}');
+
+		// stub npm file
+		testStub.withArgs("-e", localNpm).returns(true);
+		catStub.withArgs(localNpm).returns('{'); // malformed package.json
+
+		// stub src file
+		testStub.withArgs("-e", sinon.match(/file\.js$/)).returns(true);
+		catStub.withArgs(sinon.match(/file\.js$/)).returns("eval('a=2');");
+
+		cli.interpret([
+			"node", "jshint", "file.js"
+		]);
+		test.equal(process.exit.args[0][0], 0); // lint with wrong package.json
+
+		shjs.test.restore();
+		shjs.cat.restore();
+		process.cwd.restore();
 		test.done();
 	},
 
@@ -394,6 +424,37 @@ exports.group = {
 		test.equal(run.args[0][0].ignores[0], path.resolve(dir, "exclude.js"));
 		test.equal(run.args[0][0].ignores[1], path.resolve(dir, "ignored.js"));
 		test.equal(run.args[0][0].ignores[2], path.resolve(dir, "another.js"));
+
+		run.restore();
+		process.cwd.restore();
+
+		sinon.stub(process, "cwd").returns(__dirname + "/../");
+		sinon.stub(shjs, "cat")
+			.withArgs(sinon.match(/file.js$/)).returns("console.log('Hello');")
+			.withArgs(sinon.match(/\.jshintrc$/)).returns("{}")
+			.withArgs(sinon.match(/\.jshintignore$/)).returns("examples");
+
+		var args = shjs.cat.args.filter(function (arg) {
+			return !/\.jshintrc$/.test(arg[0]) && !/\.jshintignore$/.test(arg[0]);
+		});
+
+		test.equal(args.length, 0);
+
+		process.cwd.restore();
+		shjs.cat.restore();
+		test.done();
+	},
+
+	testExcludePath: function (test) {
+		var run = sinon.stub(cli, "run");
+		var dir = __dirname + "/../examples/";
+		sinon.stub(process, "cwd").returns(dir);
+
+		cli.interpret([
+			"node", "jshint", "file.js", "--exclude-path=../examples/.customignore"
+		]);
+
+		test.equal(run.args[0][0].ignores[0], path.resolve(dir, "exclude.js"));
 
 		run.restore();
 		process.cwd.restore();

@@ -11,6 +11,7 @@ var messages = require("./messages.js");
 var Lexer    = require("./lex.js").Lexer;
 var reg      = require("./reg.js");
 var options  = require("./options.js");
+var utils    = require("./utils.js");
 var console  = require("console-browserify"); // Needed for browserify to work with IE and Rhino.
 
 var varmap = {
@@ -206,59 +207,75 @@ function warn(code, opts) {
 		quit("E043", line, ch);
 }
 
-function addlabel(t, type, tkn, islet) {
-	// Define t in the current function in the current scope.
+// name: string
+// opts: { type: string, token: token, islet: bool, unused: bool }
+function addlabel(name, opts) {
+	opts = opts || {};
+
+	var type  = opts.type;
+	var islet = opts.islet;
+
+	// Define name in the current function in the current scope.
 	if (type === "exception") {
-		if (_.has(funct["(context)"], t) && funct[t] !== true && !state.option.node) {
-			warn("W002", { token: state.tokens.next, args: [t] });
+		if (_.has(funct["(context)"], name) && funct[name] !== true && !state.option.node) {
+			warn("W002", { token: state.tokens.next, args: [name] });
 		}
 	}
 
-	if (_.has(funct, t) && !funct["(global)"]) {
-		if (funct[t] === true) {
+	if (_.has(funct, name) && !funct["(global)"]) {
+		if (funct[name] === true) {
 			if (state.option.latedef) {
-				if ((state.option.latedef === true && _.contains([funct[t], type], "unction")) ||
-						!_.contains([funct[t], type], "unction")) {
-					warn("W003", { token: state.tokens.next, args: [t] });
+				if ((state.option.latedef === true && _.contains([funct[name], type], "unction")) ||
+						!_.contains([funct[name], type], "unction")) {
+					warn("W003", { token: state.tokens.next, args: [name] });
 				}
 			}
 		} else {
-			if (!state.option.shadow && type !== "exception" || (funct["(blockscope)"].getlabel(t))) {
-				warn("W004", { token: state.tokens.next, args: [t] });
+			if ((!state.option.shadow || _.contains([ "inner", "outer" ], state.option.shadow)) &&
+					type !== "exception" || funct["(blockscope)"].getlabel(name)) {
+				warn("W004", { token: state.tokens.next, args: [name] });
 			}
+		}
+	}
+
+	if (funct["(context)"] && _.has(funct["(context)"], name) && type !== "function") {
+		if (state.option.shadow === "outer") {
+			warn("W123", { token: state.tokens.next, args: [name] });
 		}
 	}
 
 	// a double definition of a let variable in same block throws a TypeError
-	if (funct["(blockscope)"] && funct["(blockscope)"].current.has(t)) {
-		warn("E044", { token: state.tokens.next, args: [t] });
+	if (funct["(blockscope)"] && funct["(blockscope)"].current.has(name)) {
+		warn("E044", { token: state.tokens.next, args: [name] });
 	}
 
 	// if the identifier is from a let, adds it only to the current blockscope
 	if (islet) {
-		funct["(blockscope)"].current.add(t, type, state.tokens.curr);
+		funct["(blockscope)"].current.add(name, type, state.tokens.curr);
 	} else {
 
-		funct[t] = type;
+		funct[name] = type;
 
-		if (tkn) {
-			funct["(tokens)"][t] = tkn;
+		if (opts.token) {
+			funct["(tokens)"][name] = opts.token;
 		}
 
+		utils.setprop(funct, name, { unused: opts.unused || false });
+
 		if (funct["(global)"]) {
-			globalscope[t] = funct;
-			if (_.has(state.implied, t)) {
+			globalscope[name] = funct;
+			if (_.has(state.implied, name)) {
 				if (state.option.latedef) {
-					if ((state.option.latedef === true && _.contains([funct[t], type], "unction")) ||
-							!_.contains([funct[t], type], "unction")) {
-						warn("W003", { token: state.tokens.next, args: [t] });
+					if ((state.option.latedef === true && _.contains([funct[name], type], "unction")) ||
+							!_.contains([funct[name], type], "unction")) {
+						warn("W003", { token: state.tokens.next, args: [name] });
 					}
 				}
 
-				delete state.implied[t];
+				delete state.implied[name];
 			}
 		} else {
-			scope[t] = funct;
+			scope[name] = funct;
 		}
 	}
 }
@@ -341,6 +358,25 @@ function doOption() {
 					return void warn("E002", { token: nt });
 
 				state.option.validthis = (val === "true");
+				return;
+			}
+
+			if (key === "shadow") {
+				switch (val) {
+				case "true":
+					state.option.shadow = true;
+					break;
+				case "outer":
+					state.option.shadow = "outer";
+					break;
+				case "false":
+				case "inner":
+					state.option.shadow = "inner";
+					break;
+				default:
+					warn("E002", { token: nt });
+				}
+
 				return;
 			}
 
@@ -784,19 +820,22 @@ function reserveName(x) {
 function prefix(s, f) {
 	var x = symbol(s, 150);
 	reserveName(x);
+
 	x.nud = (typeof f === "function") ? f : function () {
 		this.right = expression(150);
 		this.arity = "unary";
 		if (this.id === "++" || this.id === "--") {
 			if (state.option.plusplus) {
 				warn("W016", { token: this, args: [this.id] });
-			} else if ((!this.right.identifier || isReserved(this.right)) &&
+			} else if (this.right && (!this.right.identifier || isReserved(this.right)) &&
 					this.right.id !== "." && this.right.id !== "[") {
 				warn("W017", { token: this });
 			}
 		}
+
 		return this;
 	};
+
 	return x;
 }
 
@@ -1188,7 +1227,7 @@ function statement() {
 		advance();
 		advance(":");
 		scope = Object.create(s);
-		addlabel(t.value, "label");
+		addlabel(t.value, { type: "label" });
 
 		if (!state.tokens.next.labelled && state.tokens.next.value !== "{") {
 			warn("W028", { token: state.tokens.next, args: [t.value, state.tokens.next.value] });
@@ -1329,21 +1368,21 @@ function directives() {
  * Parses a single block. A block is a sequence of statements wrapped in
  * braces.
  *
- * ordinary     - true for everything but function bodies and try blocks.
- * stmt		- true if block can be a single statement (e.g. in if/for/while).
- * isfunc	- true if block is a function body
- * isfatarrow   -
- * iscase	- true if block is a switch case block
+ * ordinary   - true for everything but function bodies and try blocks.
+ * stmt       - true if block can be a single statement (e.g. in if/for/while).
+ * isfunc     - true if block is a function body
+ * isfatarrow - true if block is a body of a fat arrow function
+ * iscase     - true if block is a switch case block
  */
 function block(ordinary, stmt, isfunc, isfatarrow, iscase) {
-	var a,
-		b = inblock,
-		old_indent = indent,
-		m,
-		s = scope,
-		t,
-		line,
-		d;
+	var a;
+	var b = inblock;
+	var old_indent = indent;
+	var m;
+	var s = scope;
+	var t;
+	var line;
+	var d;
 
 	inblock = ordinary;
 
@@ -1353,8 +1392,12 @@ function block(ordinary, stmt, isfunc, isfatarrow, iscase) {
 	t = state.tokens.next;
 
 	var metrics = funct["(metrics)"];
-	metrics.nestedBlockDepth += 1;
-	metrics.verifyMaxNestedBlockDepthPerFunction();
+	var max = state.option.maxdepth;
+	metrics.blockDepth += 1;
+
+	if (max && metrics.blockDepth > 0 && metrics.blockDepth === max + 1) {
+		warn("W073", { token: null, args: [ metrics.blockDepth ] });
+	}
 
 	if (state.tokens.next.id === "{") {
 		advance("{");
@@ -1387,7 +1430,7 @@ function block(ordinary, stmt, isfunc, isfatarrow, iscase) {
 
 			a = statements(line);
 
-			metrics.statementCount += a.length;
+			metrics.statements += a.length;
 
 			if (isfunc) {
 				state.directive = m;
@@ -1449,7 +1492,7 @@ function block(ordinary, stmt, isfunc, isfatarrow, iscase) {
 
 	if (!ordinary || !state.option.funcscope) scope = s;
 	inblock = b;
-	metrics.nestedBlockDepth -= 1;
+	metrics.blockDepth -= 1;
 	return a;
 }
 
@@ -1477,22 +1520,24 @@ syntax["(identifier)"] = {
 	type: "(identifier)",
 	lbp: 0,
 	identifier: true,
+
 	nud: function () {
-		var v = this.value,
-			s = scope[v],
-			f;
+		var v = this.value;
+		var s = scope[v];
+		var f;
+		var block;
 
 		if (typeof s === "function") {
 			// Protection against accidental inheritance.
 			s = undefined;
-		} else if (typeof s === "boolean") {
+		} else if (!funct["(blockscope)"].current.has(v) && typeof s === "boolean") {
 			f = funct;
 			funct = state.functions[0];
-			addlabel(v, "var");
+			addlabel(v, { type: "var" });
 			s = funct;
 			funct = f;
 		}
-		var block;
+
 		if (_.has(funct, "(blockscope)")) {
 			block = funct["(blockscope)"].getlabel(v);
 		}
@@ -1510,6 +1555,9 @@ syntax["(identifier)"] = {
 				if (block) block[v]["(type)"] = "function";
 				else funct[v] = "function";
 				this["function"] = true;
+				break;
+			case "const":
+				utils.setprop(funct, v, { unused: false });
 				break;
 			case "function":
 				this["function"] = true;
@@ -1598,6 +1646,9 @@ syntax["(identifier)"] = {
 						s[v] = "closure";
 						funct[v] = s["(global)"] ? "global" : "outer";
 						break;
+					case "const":
+						utils.setprop(s, v, { unused: false });
+						break;
 					case "closure":
 						funct[v] = s["(global)"] ? "global" : "outer";
 						break;
@@ -1609,6 +1660,7 @@ syntax["(identifier)"] = {
 		}
 		return this;
 	},
+
 	led: function () {
 		warn("E033", { token: state.tokens.next, args: [state.tokens.next.value] });
 	}
@@ -1707,54 +1759,73 @@ infix("&&", "and", 50);
 bitwise("|", "bitor", 70);
 bitwise("^", "bitxor", 80);
 bitwise("&", "bitand", 90);
+
 relation("==", function (left, right) {
 	var eqnull = state.option.eqnull && (left.value === "null" || right.value === "null");
 
-	if (!eqnull && state.option.eqeqeq)
-		warn("W116", { token: this, args: ["===", "=="] });
-	else if (isPoorRelation(left))
-		warn("W041", { token: this, args: ["===", left.value] });
-	else if (isPoorRelation(right))
-		warn("W041", { token: this, args: ["===", right.value] });
-	else if (isTypoTypeof(right, left))
+	switch (true) {
+		case !eqnull && state.option.eqeqeq:
+			this.from = this.character;
+			warn("W116", { token: this, args: ["===", "=="] });
+			break;
+		case isPoorRelation(left):
+			warn("W041", { token: this, args: ["===", left.value] });
+			break;
+		case isPoorRelation(right):
+			warn("W041", { token: this, args: ["===", right.value] });
+			break;
+		case isTypoTypeof(right, left):
+			warn("W122", { token: this, args: [right.value] });
+			break;
+		case isTypoTypeof(left, right):
+			warn("W122", { token: this, args: [left.value] });
+	}
+
+	return this;
+});
+
+relation("===", function (left, right) {
+	if (isTypoTypeof(right, left))
 		warn("W122", { token: this, args: [right.value] });
 	else if (isTypoTypeof(left, right))
 		warn("W122", { token: this, args: [left.value] });
-	return this;
-});
-relation("===", function (left, right) {
-	if (isTypoTypeof(right, left)) {
-		warn("W122", { token: this, args: [right.value] });
-	} else if (isTypoTypeof(left, right)) {
-		warn("W122", { token: this, args: [left.value] });
-	}
-	return this;
-});
-relation("!=", function (left, right) {
-	var eqnull = state.option.eqnull &&
-			(left.value === "null" || right.value === "null");
 
-	if (!eqnull && state.option.eqeqeq) {
-		warn("W116", { token: this, args: ["!==", "!="] });
-	} else if (isPoorRelation(left)) {
-		warn("W041", { token: this, args: ["!==", left.value] });
-	} else if (isPoorRelation(right)) {
-		warn("W041", { token: this, args: ["!==", right.value] });
-	} else if (isTypoTypeof(right, left)) {
-		warn("W122", { token: this, args: [right.value] });
-	} else if (isTypoTypeof(left, right)) {
-		warn("W122", { token: this, args: [left.value] });
-	}
 	return this;
 });
+
+relation("!=", function (left, right) {
+	var eqnull = state.option.eqnull && (left.value === "null" || right.value === "null");
+
+	switch (true) {
+		case !eqnull && state.option.eqeqeq:
+			this.from = this.character;
+			warn("W116", { token: this, args: ["!==", "!="] });
+			break;
+		case isPoorRelation(left):
+			warn("W041", { token: this, args: ["!==", left.value] });
+			break;
+		case isPoorRelation(right):
+			warn("W041", { token: this, args: ["!==", right.value] });
+			break;
+		case isTypoTypeof(right, left):
+			warn("W122", { token: this, args: [right.value] });
+			break;
+		case isTypoTypeof(left, right):
+			warn("W122", { token: this, args: [left.value] });
+	}
+
+	return this;
+});
+
 relation("!==", function (left, right) {
-	if (isTypoTypeof(right, left)) {
+	if (isTypoTypeof(right, left))
 		warn("W122", { token: this, args: [right.value] });
-	} else if (isTypoTypeof(left, right)) {
+	else if (isTypoTypeof(left, right))
 		warn("W122", { token: this, args: [left.value] });
-	}
+
 	return this;
 });
+
 relation("<");
 relation(">");
 relation("<=");
@@ -2217,7 +2288,7 @@ function functionparams(parsed) {
 						t = tokens[t];
 						if (t.id) {
 							params.push(t.id);
-							addlabel(t.id, "unused", t.token);
+							addlabel(t.id, { type: "unused", token: t.token });
 						}
 					}
 				} else if (curr.value === "...") {
@@ -2226,13 +2297,13 @@ function functionparams(parsed) {
 					}
 					continue;
 				} else {
-					addlabel(curr.value, "unused", curr);
+					addlabel(curr.value, { type: "unused", token: curr });
 				}
 			}
 			return params;
 		} else {
 			if (parsed.identifier === true) {
-				addlabel(parsed.value, "unused", parsed);
+				addlabel(parsed.value, { type: "unused", token: parsed });
 				return [parsed];
 			}
 		}
@@ -2254,7 +2325,7 @@ function functionparams(parsed) {
 				t = tokens[t];
 				if (t.id) {
 					params.push(t.id);
-					addlabel(t.id, "unused", t.token);
+					addlabel(t.id, { type: "unused", token: t.token });
 				}
 			}
 		} else if (state.tokens.next.value === "...") {
@@ -2264,11 +2335,11 @@ function functionparams(parsed) {
 			advance("...");
 			ident = identifier(true);
 			params.push(ident);
-			addlabel(ident, "unused", state.tokens.curr);
+			addlabel(ident, { type: "unused", token: state.tokens.curr });
 		} else {
 			ident = identifier(true);
 			params.push(ident);
-			addlabel(ident, "unused", state.tokens.curr);
+			addlabel(ident, { type: "unused", token: state.tokens.curr });
 		}
 
 		// it is a syntax error to have a regular argument after a default argument
@@ -2296,32 +2367,19 @@ function functionparams(parsed) {
 
 function doFunction(name, statement, generator, fatarrowparams) {
 	var f;
-	var oldOption = state.option;
+	var oldOption  = state.option;
 	var oldIgnored = state.ignored;
-	var oldScope  = scope;
+	var oldScope   = scope;
 
-	state.option = Object.create(state.option);
-	state.ignored = Object.create(state.ignored);
-	scope  = Object.create(scope);
+	state.option   = Object.create(state.option);
+	state.ignored  = Object.create(state.ignored);
+	scope          = Object.create(scope);
 
-	funct = {
-		"(name)"      : name || "\"" + anonname + "\"",
-		"(line)"      : state.tokens.next.line,
-		"(character)" : state.tokens.next.character,
-		"(context)"   : funct,
-		"(breakage)"  : 0,
-		"(loopage)"   : 0,
-		"(metrics)"   : createMetrics(state.tokens.next),
-		"(scope)"     : scope,
-		"(statement)" : statement,
-		"(tokens)"    : {},
-		"(blockscope)": funct["(blockscope)"],
-		"(comparray)" : funct["(comparray)"]
-	};
-
-	if (generator) {
-		funct["(generator)"] = true;
-	}
+	funct = utils.functor(name || "\"" + anonname + "\"", state.tokens.next, scope, {
+		"(statement)": statement,
+		"(context)":   funct,
+		"(generator)": generator ? true : null
+	});
 
 	f = funct;
 	state.tokens.curr.funct = funct;
@@ -2329,11 +2387,15 @@ function doFunction(name, statement, generator, fatarrowparams) {
 	state.functions.push(funct);
 
 	if (name) {
-		addlabel(name, "function");
+		addlabel(name, { type: "function" });
 	}
 
-	funct["(params)"] = functionparams(fatarrowparams);
-	funct["(metrics)"].verifyMaxParametersPerFunction(funct["(params)"]);
+	var params = funct["(params)"] = functionparams(fatarrowparams);
+	params = params || [];
+
+	if (state.option.maxparams && params.length > state.option.maxparams) {
+		warn("W072", { token: funct["(metrics)"].token, args: [params.length] });
+	}
 
 	block(false, true, true, fatarrowparams ? true : false);
 
@@ -2341,8 +2403,17 @@ function doFunction(name, statement, generator, fatarrowparams) {
 		warn("E047", { token: state.tokens.curr });
 	}
 
-	funct["(metrics)"].verifyMaxStatementsPerFunction();
-	funct["(metrics)"].verifyMaxComplexityPerFunction();
+	var metrics = funct["(metrics)"];
+	if (state.option.maxstatements && metrics.statements > state.option.maxstatements) {
+		warn("W071", { token: metrics.token, args: [ metrics.statements ] });
+	}
+
+	var max = state.option.maxcomplexity;
+	var cc = metrics.complexity;
+	if (max && cc > max) {
+		warn("W074", { token: metrics.token, args: [cc] });
+	}
+
 	funct["(unusedOption)"] = state.option.unused;
 
 	scope = oldScope;
@@ -2355,47 +2426,8 @@ function doFunction(name, statement, generator, fatarrowparams) {
 	return f;
 }
 
-function createMetrics(functionStartToken) {
-	return {
-		statementCount: 0,
-		nestedBlockDepth: -1,
-		ComplexityCount: 1,
-
-		verifyMaxStatementsPerFunction: function () {
-			if (state.option.maxstatements &&
-				this.statementCount > state.option.maxstatements) {
-				warn("W071", { token: functionStartToken, args: [this.statementCount] });
-			}
-		},
-
-		verifyMaxParametersPerFunction: function (params) {
-			params = params || [];
-
-			if (state.option.maxparams && params.length > state.option.maxparams) {
-				warn("W072", { token: functionStartToken, args: [params.length] });
-			}
-		},
-
-		verifyMaxNestedBlockDepthPerFunction: function () {
-			if (state.option.maxdepth &&
-				this.nestedBlockDepth > 0 &&
-				this.nestedBlockDepth === state.option.maxdepth + 1) {
-				warn("W073", { token: null, args: [this.nestedBlockDepth] });
-			}
-		},
-
-		verifyMaxComplexityPerFunction: function () {
-			var max = state.option.maxcomplexity;
-			var cc = this.ComplexityCount;
-			if (max && cc > max) {
-				warn("W074", { token: functionStartToken, args: [cc] });
-			}
-		}
-	};
-}
-
 function increaseComplexityCount() {
-	funct["(metrics)"].ComplexityCount += 1;
+	funct["(metrics)"].complexity += 1;
 }
 
 // Parse assignments that were found instead of conditionals.
@@ -2667,25 +2699,26 @@ function destructuringExpression() {
 	return identifiers;
 }
 function destructuringExpressionMatch(tokens, value) {
-	if (value.first) {
-		_.zip(tokens, value.first).forEach(function (val) {
-			var token = val[0];
-			var value = val[1];
-			if (token && value) {
-				token.first = value;
-			} else if (token && token.first && !value) {
-				warn("W080", { token: token.first, args: [token.first.value] });
-			} /* else {
-				XXX value is discarded: wouldn't it need a warning ?
-			} */
-		});
-	}
+	var first = value.first;
+
+	if (!first)
+		return;
+
+	_.zip(tokens, Array.isArray(first) ? first : [ first ]).forEach(function (val) {
+		var token = val[0];
+		var value = val[1];
+
+		if (token && value)
+			token.first = value;
+		else if (token && token.first && !value)
+			warn("W080", { token: token.first, args: [token.first.value] });
+	});
 }
 
 var conststatement = stmt("const", function (prefix) {
-	var tokens, value;
-	// state variable to know if it is a lone identifier, or a destructuring statement.
-	var lone;
+	var tokens;
+	var value;
+	var lone; // State variable to know if it is a lone identifier, or a destructuring statement.
 
 	if (!api.getEnvironment("es6")) {
 		warn("W104", { token: state.tokens.curr, args: ["const"] });
@@ -2710,7 +2743,7 @@ var conststatement = stmt("const", function (prefix) {
 				warn("W079", { token: t.token, args: [t.id] });
 			}
 			if (t.id) {
-				addlabel(t.id, "const");
+				addlabel(t.id, { type: "const", token: t.token, unused: true });
 				names.push(t.token);
 			}
 		}
@@ -2772,7 +2805,7 @@ var varstatement = stmt("var", function (prefix) {
 				warn("W079", { token: t.token, args: [t.id] });
 			}
 			if (t.id) {
-				addlabel(t.id, "unused", t.token);
+				addlabel(t.id, { type: "unused", token: t.token });
 				names.push(t.token);
 			}
 		}
@@ -2843,7 +2876,7 @@ var letstatement = stmt("let", function (prefix) {
 				warn("W079", { token: t.token, args: [t.id] });
 			}
 			if (t.id && !funct["(nolet)"]) {
-				addlabel(t.id, "unused", t.token, true);
+				addlabel(t.id, { type: "unused", token: t.token, islet: true });
 				names.push(t.token);
 			}
 		}
@@ -2897,7 +2930,7 @@ function classdef(stmt) {
 	if (stmt) {
 		// BindingIdentifier
 		this.name = identifier();
-		addlabel(this.name, "unused", state.tokens.curr);
+		addlabel(this.name, { type: "unused", token: state.tokens.curr });
 	} else if (state.tokens.next.identifier && state.tokens.next.value !== "extends") {
 		// BindingIdentifier(opt)
 		this.name = identifier();
@@ -2942,7 +2975,7 @@ blockstmt("function", function () {
 		warn("E011", { token: null, args: [i] });
 	}
 
-	addlabel(i, "unction", state.tokens.curr);
+	addlabel(i, { type: "unction", token: state.tokens.curr });
 
 	doFunction(i, { statement: true }, generator);
 	if (state.tokens.next.id === "(" && state.tokens.next.line === state.tokens.curr.line) {
@@ -3008,24 +3041,16 @@ blockstmt("try", function () {
 
 		advance();
 
-		funct = {
-			"(name)"     : "(catch)",
-			"(line)"     : state.tokens.next.line,
-			"(character)": state.tokens.next.character,
+		funct = utils.functor("(catch)", state.tokens.next, scope, {
 			"(context)"  : funct,
 			"(breakage)" : funct["(breakage)"],
 			"(loopage)"  : funct["(loopage)"],
-			"(scope)"    : scope,
 			"(statement)": false,
-			"(metrics)"  : createMetrics(state.tokens.next),
-			"(catch)"    : true,
-			"(tokens)"   : {},
-			"(blockscope)": funct["(blockscope)"],
-			"(comparray)": funct["(comparray)"]
-		};
+			"(catch)"    : true
+		});
 
 		if (e) {
-			addlabel(e, "exception");
+			addlabel(e, { type: "exception" });
 		}
 
 		if (state.tokens.next.value === "if") {
@@ -3050,7 +3075,7 @@ blockstmt("try", function () {
 		funct = funct["(context)"];
 	}
 
-	block(false);
+	block(true);
 
 	while (state.tokens.next.id === "catch") {
 		increaseComplexityCount();
@@ -3064,7 +3089,7 @@ blockstmt("try", function () {
 
 	if (state.tokens.next.id === "finally") {
 		advance("finally");
-		block(false);
+		block(true);
 		return;
 	}
 
@@ -3467,7 +3492,7 @@ stmt("import", function () {
 
 	if (state.tokens.next.identifier) {
 		this.name = identifier();
-		addlabel(this.name, "unused", state.tokens.curr);
+		addlabel(this.name, { type: "unused", token: state.tokens.curr });
 	} else {
 		advance("{");
 		for (;;) {
@@ -3482,7 +3507,7 @@ stmt("import", function () {
 				advance("as");
 				importName = identifier();
 			}
-			addlabel(importName, "unused", state.tokens.curr);
+			addlabel(importName, { type: "unused", token: state.tokens.curr });
 
 			if (state.tokens.next.value === ",") {
 				advance(",");
@@ -3767,8 +3792,7 @@ var blockScope = function () {
 				return _.has(_current, t);
 			},
 			add: function (t, type, tok) {
-				_current[t] = { "(type)" : type,
-								"(token)": tok };
+				_current[t] = { "(type)" : type, "(token)": tok };
 			}
 		}
 	};
@@ -3811,17 +3835,12 @@ function parse(input, options, program) {
 	comma.first = true;
 	indent = 1;
 
-	funct = {
-		"(global)":     true,
-		"(name)":	      "(global)",
-		"(scope)":      scope,
-		"(breakage)":   0,
-		"(loopage)":    0,
-		"(tokens)":     {},
-		"(metrics)":    createMetrics(state.tokens.next),
+	funct = utils.functor("(global)", null, scope, {
+		"(global)"    : true,
 		"(blockscope)": blockScope(),
-		"(comparray)":  arrayComprehension()
-	};
+		"(comparray)" : arrayComprehension(),
+		"(metrics)"   : utils.metrics(state.tokens.next)
+	});
 
 	state.functions = [funct];
 	stack = null;
@@ -3973,7 +3992,7 @@ function parse(input, options, program) {
 		if (key.charAt(0) === "(")
 			return;
 
-		if (type !== "unused" && type !== "unction")
+		if (type !== "unused" && type !== "unction" && type !== "const")
 			return;
 
 		// Params are checked separately from other variables.
@@ -3981,9 +4000,12 @@ function parse(input, options, program) {
 			return;
 
 		// Variable is in global scope and defined as exported.
-		if (func["(global)"] && _.has(exported, key)) {
+		if (func["(global)"] && _.has(exported, key))
 			return;
-		}
+
+		// Is this constant unused?
+		if (type === "const" && !utils.getprop(func, key, "unused"))
+			return;
 
 		warnUnused(key, tkn, "var");
 	};
@@ -4041,7 +4063,7 @@ function parse(input, options, program) {
 	});
 
 	for (var key in declared) {
-		if (_.has(declared, key) && !_.has(globalscope, key)) {
+		if (_.has(declared, key) && !_.has(globalscope, key) && !_.has(exported, key)) {
 			warnUnused(key, declared[key], "var");
 		}
 	}

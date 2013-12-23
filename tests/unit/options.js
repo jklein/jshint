@@ -30,12 +30,45 @@ exports.shadow = function (test) {
 		.addError(10, "'foo' is already defined.")
 		.test(src, {es3: true});
 
+	TestRun(test)
+		.addError(5, "'a' is already defined.")
+		.addError(10, "'foo' is already defined.")
+		.test(src, {es3: true, shadow: false });
+
+	TestRun(test)
+		.addError(5, "'a' is already defined.")
+		.addError(10, "'foo' is already defined.")
+		.test(src, {es3: true, shadow: "inner" });
+
 	// Allow variable shadowing when shadow is true
 	TestRun(test)
 		.test(src, { es3: true, shadow: true });
 
 	test.done();
 };
+
+/**
+ * Option `scopeshadow` allows you to re-define variables later in inner scopes.
+ *
+ *  E.g.:
+ *    var a = 1;
+ *    function foo() {
+ *        var a = 2;
+ *    }
+ */
+exports.scopeshadow = function (test) {
+	var src = fs.readFileSync(__dirname + "/fixtures/scope-redef.js", "utf8");
+
+	// Do not tolarate inner scope variable shadowing by default
+	TestRun(test)
+		.addError(5, "'a' is already defined in outer scope.")
+		.addError(12, "'b' is already defined in outer scope.")
+		.addError(20, "'bar' is already defined in outer scope.")
+		.addError(26, "'foo' is already defined.")
+		.test(src, { es3: true, shadow: "outer" });
+
+	test.done();
+}
 
 /**
  * Option `latedef` allows you to prohibit the use of variable before their
@@ -439,14 +472,16 @@ exports.undef = function (test) {
 exports.unused = function (test) {
 	var src = fs.readFileSync(__dirname + '/fixtures/unused.js', 'utf8');
 
-	TestRun(test).test(src, { es3: true });
+	TestRun(test).test(src, { esnext: true });
 
 	var var_errors = [
 		[1, "'a' is defined but never used."],
 		[7, "'c' is defined but never used."],
 		[15, "'foo' is defined but never used."],
 		[20, "'bar' is defined but never used."],
-		[22, "'i' is defined but never used."]
+		[22, "'i' is defined but never used."],
+		[36, "'cc' is defined but never used."],
+		[39, "'dd' is defined but never used."]
 	];
 
 	var last_param_errors = [
@@ -465,14 +500,14 @@ exports.unused = function (test) {
 		[28, "'c' is defined but never used."]
 	];
 
-	var true_run = TestRun(test, {es3: true});
+	var true_run = TestRun(test, {esnext: true});
 
 	var_errors.concat(last_param_errors).forEach(function (e) {
 		true_run.addError.apply(true_run, e);
 	});
 
-	true_run.test(src, { unused: true });
-	test.ok(!jshint.run(src, { es3: true, unused: true }).success);
+	true_run.test(src, { esnext: true, unused: true });
+	test.ok(!jshint.run(src, { esnext: true, unused: true }).success);
 
 	// Test checking all function params via unused="strict"
 	var all_run = TestRun(test);
@@ -480,15 +515,15 @@ exports.unused = function (test) {
 		all_run.addError.apply(true_run, e);
 	});
 
-	all_run.test(src, { es3: true, unused: "strict"});
+	all_run.test(src, { esnext: true, unused: "strict"});
 
 	// Test checking everything except function params
 	var vars_run = TestRun(test);
 	var_errors.forEach(function (e) { vars_run.addError.apply(vars_run, e); });
-	vars_run.test(src, { unused: "vars"});
+	vars_run.test(src, { esnext: true, unused: "vars"});
 
-	var unused = jshint.run(src, { unused: "vars" }).data.unused;
-	test.equal(10, unused.length);
+	var unused = jshint.run(src, { esnext: true, unused: "vars" }).data.unused;
+	test.equal(12, unused.length);
 	test.ok(unused.some(function (err) { return err.line === 1 && err.name === "a"; }));
 	test.ok(unused.some(function (err) { return err.line === 6 && err.name === "f"; }));
 	test.ok(unused.some(function (err) { return err.line === 7 && err.name === "c"; }));
@@ -963,6 +998,8 @@ exports.scope = function (test) {
 		.addError(27, "'bb' used out of scope.")
 		.addError(37, "'cc' is not defined.")
 		.addError(42, "'bb' is not defined.")
+		.addError(53, "'xx' used out of scope.")
+		.addError(54, "'yy' used out of scope.")
 		.test(src, {es3: true});
 
 	TestRun(test, 2)
